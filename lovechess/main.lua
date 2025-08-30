@@ -8,6 +8,8 @@ function love.load()
     BOARD_OFFSET_Y = 50
     PIECES_ON_BOARD = 3  -- Number of pieces drawn from deck
     ENEMY_PIECES_ON_BOARD = 5  -- Number of enemy pieces to place
+    MAX_MOVES = 4  -- Maximum moves per round
+    MAX_DISCARDS = 3  -- Maximum discards per round
     
     -- Colors
     LIGHT_TILE = {0.9, 0.9, 0.8}  -- Light beige
@@ -47,6 +49,9 @@ function love.load()
     score = 0
     lastCapture = nil -- Store info about last capture for display
     captureHistory = {} -- Track all captures this round
+    movesLeft = MAX_MOVES
+    discardsLeft = MAX_DISCARDS
+    discardMode = false -- Whether we're in discard mode
     
     -- Initialize game data
     initializeGame()
@@ -91,6 +96,9 @@ function initializeGame()
     score = 0
     lastCapture = nil
     captureHistory = {}
+    movesLeft = MAX_MOVES
+    discardsLeft = MAX_DISCARDS
+    discardMode = false
 end
 
 function shuffleDeck()
@@ -274,13 +282,28 @@ function drawUI()
     love.graphics.setColor(0.2, 1.0, 0.2) -- Green for score
     love.graphics.print("Score: " .. score, 300, 10)
     
+    -- Draw moves and discards counter
+    love.graphics.setFont(love.graphics.newFont(16))
+    love.graphics.setColor(0.8, 0.8, 1.0) -- Light blue
+    love.graphics.print("Moves: " .. movesLeft .. "/" .. MAX_MOVES, 500, 10)
+    love.graphics.print("Discards: " .. discardsLeft .. "/" .. MAX_DISCARDS, 500, 30)
+    
+    -- Show current mode
+    if discardMode then
+        love.graphics.setColor(1.0, 0.8, 0.2) -- Orange for discard mode
+        love.graphics.print("DISCARD MODE", 500, 50)
+    else
+        love.graphics.setColor(0.2, 1.0, 0.2) -- Green for move mode
+        love.graphics.print("MOVE MODE", 500, 50)
+    end
+    
     -- Draw last capture info
     if lastCapture then
         love.graphics.setFont(love.graphics.newFont(14))
         love.graphics.setColor(1.0, 0.8, 0.2) -- Gold for capture info
         local captureText = "Last: " .. lastCapture.playerPiece .. " × " .. lastCapture.enemyPiece .. 
                            " = " .. lastCapture.chips .. " × " .. lastCapture.mult .. " = " .. lastCapture.score
-        love.graphics.print(captureText, 300, 35)
+        love.graphics.print(captureText, 300, 70)
     end
     
     -- Reset color to white
@@ -308,6 +331,10 @@ function drawUI()
     local playerPieces, enemyPieces = countPiecesOnBoard()
     love.graphics.print("Player pieces: " .. playerPieces .. " | Enemy pieces: " .. enemyPieces, 10, 570)
     
+    -- Show total enemy chips available
+    local totalEnemyChips = getTotalEnemyChips()
+    love.graphics.print("Total enemy chips: " .. totalEnemyChips, 200, 570)
+    
     -- Selection info
     if selectedPiece then
         local piece = board[selectedPiece.row][selectedPiece.col]
@@ -332,19 +359,25 @@ function drawUI()
     end
     
     -- Show deck contents for testing
-    love.graphics.print("Deck contents:", 300, 550)
+    love.graphics.print("Deck contents:", 300, 650)
     local deckText = ""
     for i, pieceType in ipairs(deck) do
         deckText = deckText .. PIECE_STATS[pieceType].symbol
         if i < #deck then deckText = deckText .. ", " end
     end
-    love.graphics.print(deckText, 300, 570)
+    love.graphics.print(deckText, 300, 670)
     
     -- Debug info
-    love.graphics.print("Step 5: Enhanced Scoring System", 10, 50)
+    love.graphics.print("Step 6: Moves & Discards System", 10, 50)
     love.graphics.print("Click piece to select, click enemy to capture", 10, 70)
-    love.graphics.print("Score = Player Chips × Player Mult", 10, 90)
-    love.graphics.print("Press SPACE to redraw pieces, R to reshuffle, E to respawn enemies, C to clear score", 10, 110)
+    love.graphics.print("Press D to toggle discard mode, N for new round", 10, 90)
+    love.graphics.print("Press SPACE to redraw, R to reshuffle, E for new enemies, C to clear score", 10, 110)
+end
+
+-- Add the utility function back
+-- Utility function to check if coordinates are within board
+function isValidBoardPosition(x, y)
+    return x >= 1 and x <= BOARD_SIZE and y >= 1 and y <= BOARD_SIZE
 end
 
 function countPiecesOnBoard()
@@ -642,10 +675,86 @@ function love.keypressed(key)
         -- Clear score (for testing)
         score = 0
         print("Score reset")
+        
+    elseif key == "d" then
+        -- Toggle discard mode
+        discardMode = not discardMode
+        selectedPiece = nil
+        validMoves = {}
+        if discardMode then
+            print("Discard mode ON - Click player pieces to discard them")
+        else
+            print("Discard mode OFF - Back to normal move mode")
+        end
+        
+    elseif key == "n" then
+        -- Start new round (reset moves and discards)
+        movesLeft = MAX_MOVES
+        discardsLeft = MAX_DISCARDS
+        discardMode = false
+        selectedPiece = nil
+        validMoves = {}
+        print("New round started! Moves: " .. movesLeft .. ", Discards: " .. discardsLeft)
     end
 end
 
--- Utility function to check if coordinates are within board
-function isValidBoardPosition(x, y)
-    return x >= 1 and x <= BOARD_SIZE and y >= 1 and y <= BOARD_SIZE
+
+function discardPiece(row, col)
+    local piece = board[row][col]
+    local file = string.char(96 + col)
+    local rank = tostring(9 - row)
+    
+    -- Return piece to deck
+    table.insert(deck, piece.type)
+    board[row][col] = nil
+    
+    -- Shuffle deck and draw a new piece
+    shuffleDeck()
+    
+    -- Find a new random position for the replacement piece
+    local attempts = 0
+    local newRow, newCol
+    
+    repeat
+        newRow = math.random(1, BOARD_SIZE)
+        newCol = math.random(1, BOARD_SIZE)
+        attempts = attempts + 1
+    until board[newRow][newCol] == nil or attempts > 100
+    
+    if attempts <= 100 and #deck > 0 then
+        -- Place new piece from deck
+        local newPieceType = table.remove(deck, 1)
+        board[newRow][newCol] = {
+            type = newPieceType,
+            chips = PIECE_STATS[newPieceType].chips,
+            mult = PIECE_STATS[newPieceType].mult,
+            isPlayer = true
+        }
+        
+        local newFile = string.char(96 + newCol)
+        local newRank = tostring(9 - newRow)
+        print("Discarded " .. piece.type .. " at " .. file .. rank .. ", drew " .. newPieceType .. " at " .. newFile .. newRank)
+    else
+        print("Discarded " .. piece.type .. " at " .. file .. rank .. " but couldn't place replacement (deck empty or board full)")
+    end
+    
+    discardsLeft = discardsLeft - 1
+    
+    -- Check if round is over
+    if movesLeft == 0 and discardsLeft == 0 then
+        print("Round over! No moves or discards left.")
+    end
+end
+
+function getTotalEnemyChips()
+    local total = 0
+    for row = 1, BOARD_SIZE do
+        for col = 1, BOARD_SIZE do
+            local piece = board[row][col]
+            if piece and piece.isEnemy then
+                total = total + piece.chips
+            end
+        end
+    end
+    return total
 end
